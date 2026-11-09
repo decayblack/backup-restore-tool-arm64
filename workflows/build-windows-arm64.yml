@@ -1,0 +1,92 @@
+name: Build Windows ARM64 EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Package on Windows ARM64
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: '1'
+      PYTHONUNBUFFERED: '1'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
+    steps:
+      - name: Initialize diagnostics
+        run: |
+          $logs = Join-Path $env:RUNNER_TEMP 'arm64-build-logs'
+          New-Item -ItemType Directory -Path $logs -Force | Out-Null
+          @(
+            "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            "Attempt: $env:GITHUB_RUN_ATTEMPT"
+            "Commit: $env:GITHUB_SHA"
+            "Runner: $env:RUNNER_OS / $env:RUNNER_ARCH"
+          ) | Set-Content (Join-Path $logs 'build-arm64.log') -Encoding utf8
+
+      - name: Check out source
+        id: checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up native ARM64 Python
+        id: python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13.14'
+          architecture: arm64
+
+      - name: Build and verify executable
+        id: package
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'arm64-build-logs/build-arm64.log'
+          $PSNativeCommandUseErrorActionPreference = $false
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+          python .github/build_arm64.py 2>&1 | Tee-Object -FilePath $log -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload verified ARM64 executable
+        id: exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: Backup_and_Restore_Tool_v0.24.3_ARM64
+          path: |
+            dist/Backup_and_Restore_Tool_v0.24.3_ARM64.exe
+            dist/Backup_and_Restore_Tool_v0.24.3_ARM64.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Collect build diagnostics
+        if: always()
+        run: |
+          $logs = Join-Path $env:RUNNER_TEMP 'arm64-build-logs'
+          New-Item -ItemType Directory -Path $logs -Force | Out-Null
+          @(
+            ""
+            "Checkout: ${{ steps.checkout.outcome }}"
+            "Set up Python: ${{ steps.python.outcome }}"
+            "Build and verify: ${{ steps.package.outcome }}"
+            "Upload EXE: ${{ steps.exe.outcome }}"
+            "For checkout, setup-python or artifact service errors, see the matching step in GitHub Actions."
+          ) | Add-Content (Join-Path $logs 'build-arm64.log') -Encoding utf8
+          Get-ChildItem -Path build -Filter 'warn-*.txt' -Recurse -ErrorAction SilentlyContinue |
+            Copy-Item -Destination $logs
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARM64-Build-Logs
+          path: ${{ runner.temp }}/arm64-build-logs/
+          if-no-files-found: error
+          retention-days: 14
